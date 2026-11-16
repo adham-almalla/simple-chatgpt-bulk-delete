@@ -43,3 +43,7 @@ Most bulk-delete extensions turn the whole chat row into a checkbox, so you can 
 - Deleting is permanent and cannot be undone. Archived chats can be restored from ChatGPT's settings.
 - The extension uses the same internal request the ChatGPT website sends when you delete a chat, using your signed-in session in your own browser. This is not an official API, so a ChatGPT update may break it.
 - Not affiliated with or endorsed by OpenAI.
+
+## License
+
+Free to use under the [MIT License](LICENSE).
