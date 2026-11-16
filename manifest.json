@@ -1,8 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Simple ChatGPT Bulk Delete",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Bulk delete or archive ChatGPT chats with checkboxes, while chat titles stay clickable so you can open and review them first.",
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": ["https://chatgpt.com/*"],

@@ -116,7 +116,7 @@
       button('Delete', () => confirmAndRun('delete'), 'bcd-danger'),
     ];
     buttons[2].title = 'Download one .txt file per selected chat';
-    buttons[3].title = 'Opens the print dialog: choose "Save as PDF" as the destination';
+    buttons[3].title = 'Opens the selected chats in a new tab with the print dialog: choose "Save as PDF"';
     bar.append(countEl, ...buttons);
     document.body.appendChild(bar);
   }
@@ -369,60 +369,14 @@
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
-  // Builds a print-only copy of the chats and opens the browser's print dialog,
-  // where "Save as PDF" produces the file.
-  function printChats(chats) {
-    document.getElementById('bcd-print')?.remove();
-    const root = document.createElement('div');
-    root.id = 'bcd-print';
-    for (const chat of chats) {
-      const section = document.createElement('section');
-      section.className = 'bcd-chat';
-      const h = document.createElement('h1');
-      h.textContent = chat.title;
-      h.dir = 'auto';
-      section.appendChild(h);
-      if (chat.created) {
-        const meta = document.createElement('p');
-        meta.className = 'bcd-meta';
-        meta.textContent = `Created: ${chat.created}`;
-        section.appendChild(meta);
-      }
-      for (const msg of chat.messages) {
-        const role = document.createElement('div');
-        role.className = 'bcd-role';
-        role.textContent = speaker(msg.role);
-        const text = document.createElement('div');
-        text.className = 'bcd-text';
-        text.dir = 'auto';
-        text.textContent = msg.text;
-        section.append(role, text);
-      }
-      root.appendChild(section);
+  // Hands the chats to the extension's own export page, which opens in a new tab,
+  // shows them, and opens the print dialog ("Save as PDF" produces the file).
+  async function printChats(chats) {
+    try {
+      await chrome.runtime.sendMessage({ type: 'bcd-print', chats });
+    } catch {
+      flash('Could not open the export page. Refresh this tab and try again.', 8000);
     }
-    document.body.appendChild(root);
-    document.documentElement.classList.add('bcd-printing');
-
-    const oldTitle = document.title;
-    document.title = chats.length === 1 ? safeName(chats[0].title) : `ChatGPT export (${chats.length} chats)`;
-    let cleaned = false;
-    const cleanup = () => {
-      if (cleaned) return;
-      cleaned = true;
-      window.removeEventListener('afterprint', cleanup);
-      document.documentElement.classList.remove('bcd-printing');
-      root.remove();
-      document.title = oldTitle;
-    };
-    window.addEventListener('afterprint', cleanup);
-    setTimeout(() => {
-      try {
-        window.print();
-      } finally {
-        // Fallback in case afterprint never fires.
-        setTimeout(cleanup, 60000);
-      }
-    }, 100);
   }
 
   async function runExport(format) {
@@ -472,7 +426,7 @@
         await sleep(300);
       }
     } else {
-      printChats(chats);
+      await printChats(chats);
     }
     const noun = chats.length === 1 ? 'chat' : 'chats';
     statusText = '';

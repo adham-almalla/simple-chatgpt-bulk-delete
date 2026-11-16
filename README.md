@@ -34,7 +34,7 @@ Most bulk-delete extensions turn the whole chat row into a checkbox, so you can 
 ## Export
 
 - **Export TXT** downloads one `.txt` file per selected chat. Chrome may ask once for permission to download multiple files.
-- **Export PDF** opens the print dialog with all selected chats in one document, each starting on a new page. Choose **Save as PDF** as the destination.
+- **Export PDF** opens the selected chats in a new tab as one document, each chat starting on a new page, and brings up the print dialog. Choose **Save as PDF** as the destination.
 - Exports contain the text of your messages and ChatGPT's replies. Images and file attachments are not included.
 - Exporting leaves your selection in place, so you can export first and delete afterwards.
 
