@@ -110,9 +110,13 @@
         selected.clear();
         refresh();
       }),
+      button('Export TXT', () => runExport('txt')),
+      button('Export PDF', () => runExport('pdf')),
       button('Archive', () => confirmAndRun('archive')),
       button('Delete', () => confirmAndRun('delete'), 'bcd-danger'),
     ];
+    buttons[2].title = 'Download one .txt file per selected chat';
+    buttons[3].title = 'Opens the print dialog: choose "Save as PDF" as the destination';
     bar.append(countEl, ...buttons);
     document.body.appendChild(bar);
   }
@@ -278,6 +282,203 @@
         ? `${past} ${done}, ${failed} failed (still selected, try again)`
         : `${past} ${done} ${done === 1 ? 'chat' : 'chats'}`
     );
+  }
+
+  // ---------- Export ----------
+
+  async function fetchConversation(id, token) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const res = await fetch(`/backend-api/conversation/${id}`, {
+        credentials: 'include',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) return res.json();
+      if (res.status === 429 || res.status >= 500) {
+        await sleep(1500 * (attempt + 1));
+        continue;
+      }
+      return null;
+    }
+    return null;
+  }
+
+  function messageText(m) {
+    const role = m.author?.role;
+    if (role !== 'user' && role !== 'assistant') return '';
+    if (m.metadata?.is_visually_hidden_from_conversation) return '';
+    if (m.recipient && m.recipient !== 'all') return ''; // tool calls
+    const c = m.content || {};
+    if (c.content_type !== 'text' && c.content_type !== 'multimodal_text') return '';
+    return (c.parts || [])
+      .map((p) => {
+        if (typeof p === 'string') return p;
+        if (p && typeof p.content_type === 'string' && p.content_type.includes('image')) return '[image]';
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n')
+      .replace(/[^]*/g, '') // inline citation markers
+      .trim();
+  }
+
+  // Follow the visible branch of the conversation from its last message back to the start.
+  function extractMessages(conv) {
+    const mapping = conv.mapping || {};
+    const out = [];
+    const seen = new Set();
+    let nodeId = conv.current_node;
+    while (nodeId && mapping[nodeId] && !seen.has(nodeId)) {
+      seen.add(nodeId);
+      const m = mapping[nodeId].message;
+      const text = m ? messageText(m) : '';
+      if (text) out.push({ role: m.author.role, text });
+      nodeId = mapping[nodeId].parent;
+    }
+    return out.reverse();
+  }
+
+  const speaker = (role) => (role === 'user' ? 'You' : 'ChatGPT');
+
+  function chatToText(chat) {
+    const lines = [chat.title];
+    if (chat.created) lines.push(`Created: ${chat.created}`);
+    lines.push(`Link: https://chatgpt.com/c/${chat.id}`, '='.repeat(60), '');
+    for (const msg of chat.messages) lines.push(`${speaker(msg.role)}:`, msg.text, '');
+    return lines.join('\n');
+  }
+
+  function safeName(title) {
+    return (
+      title
+        .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 80) || 'chat'
+    );
+  }
+
+  function downloadText(name, text) {
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
+  // Builds a print-only copy of the chats and opens the browser's print dialog,
+  // where "Save as PDF" produces the file.
+  function printChats(chats) {
+    document.getElementById('bcd-print')?.remove();
+    const root = document.createElement('div');
+    root.id = 'bcd-print';
+    for (const chat of chats) {
+      const section = document.createElement('section');
+      section.className = 'bcd-chat';
+      const h = document.createElement('h1');
+      h.textContent = chat.title;
+      h.dir = 'auto';
+      section.appendChild(h);
+      if (chat.created) {
+        const meta = document.createElement('p');
+        meta.className = 'bcd-meta';
+        meta.textContent = `Created: ${chat.created}`;
+        section.appendChild(meta);
+      }
+      for (const msg of chat.messages) {
+        const role = document.createElement('div');
+        role.className = 'bcd-role';
+        role.textContent = speaker(msg.role);
+        const text = document.createElement('div');
+        text.className = 'bcd-text';
+        text.dir = 'auto';
+        text.textContent = msg.text;
+        section.append(role, text);
+      }
+      root.appendChild(section);
+    }
+    document.body.appendChild(root);
+    document.documentElement.classList.add('bcd-printing');
+
+    const oldTitle = document.title;
+    document.title = chats.length === 1 ? safeName(chats[0].title) : `ChatGPT export (${chats.length} chats)`;
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      window.removeEventListener('afterprint', cleanup);
+      document.documentElement.classList.remove('bcd-printing');
+      root.remove();
+      document.title = oldTitle;
+    };
+    window.addEventListener('afterprint', cleanup);
+    setTimeout(() => {
+      try {
+        window.print();
+      } finally {
+        // Fallback in case afterprint never fires.
+        setTimeout(cleanup, 60000);
+      }
+    }, 100);
+  }
+
+  async function runExport(format) {
+    if (busy || selected.size === 0) return;
+    const items = [...selected.entries()];
+    const chats = [];
+    let failed = 0;
+    busy = true;
+
+    try {
+      const token = await getToken();
+      for (const [id, fallbackTitle] of items) {
+        statusText = `Loading ${chats.length + failed + 1} of ${items.length}…`;
+        refresh();
+        let conv = null;
+        try {
+          conv = await fetchConversation(id, token);
+        } catch {
+          conv = null;
+        }
+        if (conv) {
+          chats.push({
+            id,
+            title: (conv.title || fallbackTitle || 'Untitled chat').trim(),
+            created: conv.create_time ? new Date(conv.create_time * 1000).toLocaleString() : '',
+            messages: extractMessages(conv),
+          });
+        } else {
+          failed++;
+        }
+        await sleep(150);
+      }
+    } catch (err) {
+      busy = false;
+      flash(err.message || 'Something went wrong.', 6000);
+      return;
+    }
+
+    busy = false;
+    if (chats.length === 0) {
+      flash('Could not load the selected chats.', 6000);
+      return;
+    }
+    if (format === 'txt') {
+      for (const chat of chats) {
+        downloadText(`${safeName(chat.title)}.txt`, chatToText(chat));
+        await sleep(300);
+      }
+    } else {
+      printChats(chats);
+    }
+    const noun = chats.length === 1 ? 'chat' : 'chats';
+    statusText = '';
+    refresh();
+    if (failed) flash(`Exported ${chats.length} ${noun}, ${failed} failed`);
+    else if (format === 'txt') flash(`Exported ${chats.length} ${noun}`, 2500);
   }
 
   // ---------- Keep in sync with the page ----------
